@@ -103,16 +103,13 @@ int main (int argc, char *argv[])
     /*encryption is done, close the 2 files*/
     fclose(f_input);
     fclose(f_enc);
-   
-    /*DECRYPTION
-    ****zero means we want to decrypt*********/
-    params->encrypt = 0;
     
     f_input = fopen("encrypted_file", "rb");
     if(!f_input) {
         fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
         return errno;
     }
+    
     /*TODO finish doing the the byte change in the propagation file*/
     f_enc_prop= fopen("prop_file", "wb");
     if(!f_enc_prop) {
@@ -147,11 +144,22 @@ int main (int argc, char *argv[])
     
     file_encrypt_decrypt(params, f_enc_prop, f_dec_prop);
    
-    /*TODO Close the files*/
     fclose(f_enc_prop);
     fclose(f_dec_prop);
     
     /************END of file byte modification************/
+    
+   
+    /*DECRYPTION
+    ****zero means we want to decrypt*********/
+    params->encrypt = 0;
+    
+    f_input = fopen("encrypted_file", "rb");
+    if(!f_input) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
+
     f_input = fopen("encrypted_file", "rb");
     if(!f_input) {
         fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
@@ -248,6 +256,3 @@ void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr) {
         EVP_CIPHER_CTX_cleanup(ctx);
 }
 
-void propagation(cipher_params_t* params, FILE* infptr, FILE* ofptr) {
-    
-}
