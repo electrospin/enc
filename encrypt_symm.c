@@ -1,9 +1,22 @@
-#include <openssl/conf.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+//#include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
-#include <string.h>
-#include <stdio.h>
-#include <sys/file.h>
+#include <openssl/rand.h>
+#include <openssl/aes.h>
+
+
+#define AES_256_KEY_SIZE 32 /*32 byte key (256 bit key)*/
+#define AES_BLOCK_SIZE  16 /*16 byte block size (128 bits)*/
+#define BUFSIZE 1024
+
+#define ERR_EVP_CIPHER_INIT -1 
+#define ERR_EVP_CIPHER_UPDATE -2 
+#define ERR_EVP_CIPHER_FINAL -3 
+#define ERR_EVP_CTX_NEW -4 
 
 typedef struct _cipher_params_t{
    unsigned char *key;
@@ -12,41 +25,172 @@ typedef struct _cipher_params_t{
    const EVP_CIPHER *cipher_type;
 }cipher_params_t;
 
+void file_encrypt_decrypt(cipher_params_t *params, FILE *infptr, FILE *ofptr);
 
-int AES_256_KEY_SIZE = 256;
-int AES_BLOCK_SIZE   = 64;
+void cleanup(cipher_params_t *params, FILE *ifp, FILE *ofp, int rc) {
+    free(params);
+    fclose(ifp);
+    fclose(ofp);
+    exit(rc);
+}
+
 int main (int argc, char *argv[])
 {
-   FILE *f_input;
-   FILE *f_enc;
-   FILE *f_dec;
+    
+    FILE * f_input;
+    FILE * f_enc;
+    FILE * f_dec;
 
-   if(argc != 2) {
+    if(argc != 2) {
       printf("Usage: %s need to pass in /path/to/file \n", argv[0]);
       return -1;
-   }
+    }
 
-   cipher_params_t *params = (cipher_params_t *)malloc(sizeof(cipher_params_t));
-   if(!params) {
-      //unable to allocate memory on heap
-      fprintf(stderr, "ERROR: malloc error: %s\n", stderror(errno));
-      return errno;
-   }
-   //key to use for encryption and decryption
-   unsigned char key[AES_256_KEY_SIZE];
+    cipher_params_t *params = (cipher_params_t *)malloc(sizeof(cipher_params_t));
+    if(!params) {
+       //unable to allocate memory on heap
+       fprintf(stderr, "ERROR: malloc error: %s\n", strerror(errno));
+       return errno;
+    }
+    //key to use for encryption and decryption
+    unsigned char key[AES_256_KEY_SIZE];
    
-   //Initialization vector
-   unsigned char iv[AES_BLOCK_SIZE];
+    //Initialization vector
+    unsigned char iv[AES_BLOCK_SIZE];
    
-   params->key = key;
-   params->iv = iv;
-   // indicate that we want to encrypt
-   params->encrypt = 1;
+    /*Print error if PRNG does not seed with enough randomness*/
+    if(!RAND_bytes(key, sizeof(key)) || !RAND_bytes(iv, sizeof(iv))) {
+        /*OpenSSL reports a failure, act accordingly*/
+        fprintf(stderr, "ERROR: RAND_bytes error: %\n", strerror(errno));
+        return errno;
+    }
+    
+    
+    params->key = key;
+    params->iv = iv;
+    
+    // indicate that we want to encrypt
+    params->encrypt = 1;
+    // set the cipher type you want for encryption-decryption
+    params->cipher_type = EVP_aes_256_cbc();
    
-   // set the cipher type you want for encryption-decryption
-   params->cipher_type = EVP_aes256_cbc();
+    //Open the file for reading in binary
+    f_input = fopen(argv[1], "rb");
+    if(!f_input) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
+    //open the encrypted file for reading in binary "rb" mode
+    f_enc = fopen("encrypted_file", "wb");
+    if(!f_enc) {
+       fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno)); 
+       return errno;
+    }
+    // Encrypt the input file
+    file_encrypt_decrypt(params, f_input, f_enc);
    
+    /*encryption is done, close the 2 files*/
+    fclose(f_input);
+    fclose(f_enc);
+    
+    /*DECRYPTION
+    ****zero means we want to decrypt*********/
+    params->encrypt = 0;
+    
+    f_input = fopen("encrypted_file", "rb");
+    if(!f_input) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
+    
+    // open and truncate file to zero length or create decrypted file for for writting
+    f_dec = fopen("decrypted_file", "wb");
+    if (!f_dec) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }    
+    file_encrypt_decrypt(params, f_input, f_dec);
    
-   return 0;
+    fclose(f_input);
+    fclose(f_dec);
    
+    free(params);
+    
+    return 0;
 }
+
+/*BEGIN file_encrypt_decrypt function*/
+void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr)
+{
+    int cipher_block_size = EVP_CIPHER_block_size(params->cipher_type);
+    unsigned char in_buf[BUFSIZE];
+    unsigned char out_buf[BUFSIZE + cipher_block_size];
+    
+    int num_bytes_read;
+    int out_len;
+    EVP_CIPHER_CTX *ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    
+    if(ctx == NULL) {
+        fprintf(stderr, "ERROR: EVP_CIPHER_CTX_new failed. OpenSSL error: %s\n", ERR_error_string(ERR_get_error(), NULL) );
+        cleanup(params, infptr, ofptr, ERR_EVP_CTX_NEW);
+    }
+    /*Don't set the key or IV right away, as we need to check thier lengths*/
+    if(!EVP_CipherInit_ex(ctx, params->cipher_type, NULL, NULL, NULL, params->encrypt)) {
+        fprintf(stderr, "ERROR: EVP_CipherInit_ex failed. OpenSSL error: %s\n", ERR_error_string(ERR_get_error(), NULL));
+        cleanup(params, infptr, ofptr, ERR_EVP_CIPHER_INIT);
+    }
+    
+    OPENSSL_assert(EVP_CIPHER_CTX_key_length(ctx) == AES_256_KEY_SIZE);
+    OPENSSL_assert(EVP_CIPHER_CTX_iv_length(ctx)  == AES_BLOCK_SIZE);
+    
+    /* Now we can set the key and IV */
+    if(!EVP_CipherInit_ex(ctx, NULL, NULL, params->key, params->iv, params->encrypt)) {
+        fprintf(stderr, "ERROR: EVP_CipherInit_ex failed. OpenSSL error: %s\n", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_cleanup(ctx);
+        cleanup(params, infptr, ofptr, ERR_EVP_CIPHER_INIT);
+    }
+    
+    printf("Key: %s \t IV: %s", params->key, params->iv);
+    
+    while(1) {
+        // read in data in blocks until EOF. Update the ciphering with each read.
+        num_bytes_read = fread(in_buf, sizeof(unsigned char), BUFSIZE, infptr);
+        if(ferror(infptr)){
+            fprintf(stderr, "ERROR: fread error: %s\n", strerror(errno));
+            EVP_CIPHER_CTX_cleanup(ctx);
+            cleanup(params, infptr, ofptr, errno);
+        }
+        if(!EVP_CipherUpdate(ctx, out_buf, &out_len, in_buf, num_bytes_read)){
+            fprintf(stderr, "ERROR: EVP_CipherUdate failed. OpenSSL error: %s\n", ERR_error_string(ERR_get_error(), NULL));
+            EVP_CIPHER_CTX_cleanup(ctx);
+            cleanup(params, infptr, ofptr, ERR_EVP_CIPHER_UPDATE);
+        }
+        
+        fwrite(out_buf, sizeof(unsigned char), out_len, ofptr);
+        if(ferror(ofptr)) {
+            fprintf(stderr, "ERROR: fwrite error: %s\n", strerror(errno));
+            EVP_CIPHER_CTX_cleanup(ctx);
+            cleanup(params, infptr, ofptr, errno);
+        }
+        if(num_bytes_read < BUFSIZE) {
+            //reached EOF
+            break;
+        }
+    }
+        
+        /*Now cipher the final block and write it out to file*/
+        if(!EVP_CipherFinal_ex(ctx, out_buf, &out_len)){
+            fprintf(stderr, "ERROR: EVP_CipherFinal_ex failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+            EVP_CIPHER_CTX_cleanup(ctx);
+            cleanup(params, infptr, ofptr, ERR_EVP_CIPHER_FINAL);
+        }        
+        fwrite(out_buf, sizeof(unsigned char), out_len, ofptr);
+        if(ferror(ofptr)) {
+            fprintf(stderr, "ERROR: fwrite error: %s\n", strerror(errno));
+            EVP_CIPHER_CTX_cleanup(ctx);
+            cleanup(params, infptr, ofptr, errno);
+        }
+        EVP_CIPHER_CTX_cleanup(ctx);
+}
+
