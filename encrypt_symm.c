@@ -34,12 +34,18 @@ void cleanup(cipher_params_t *params, FILE *ifp, FILE *ofp, int rc) {
     exit(rc);
 }
 
+enum MODES {ECB, CBC, CTR};
+
 int main (int argc, char *argv[])
 {
     
-    FILE * f_input;
-    FILE * f_enc;
-    FILE * f_dec;
+    FILE *f_input;
+    FILE *f_enc;
+    FILE *f_dec;
+    FILE *f_enc_prop;
+    FILE *f_dec_prop;
+    unsigned char  copybuff[BUFSIZE];
+    size_t n;
 
     if(argc != 2) {
       printf("Usage: %s need to pass in /path/to/file \n", argv[0]);
@@ -52,6 +58,7 @@ int main (int argc, char *argv[])
        fprintf(stderr, "ERROR: malloc error: %s\n", strerror(errno));
        return errno;
     }
+    
     //key to use for encryption and decryption
     unsigned char key[AES_256_KEY_SIZE];
    
@@ -65,16 +72,20 @@ int main (int argc, char *argv[])
         return errno;
     }
     
-    
     params->key = key;
     params->iv = iv;
     
     // indicate that we want to encrypt
     params->encrypt = 1;
     // set the cipher type you want for encryption-decryption
+    
+    /*pass in mode as a runtime parameter and act accordingly
+    case(1): MODE == 0;
+    case(2): MODE == 1;*/
+
     params->cipher_type = EVP_aes_256_cbc();
    
-    //Open the file for reading in binary
+    //Open the plain text file for reading in binary
     f_input = fopen(argv[1], "rb");
     if(!f_input) {
         fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
@@ -88,11 +99,11 @@ int main (int argc, char *argv[])
     }
     // Encrypt the input file
     file_encrypt_decrypt(params, f_input, f_enc);
-   
+    
     /*encryption is done, close the 2 files*/
     fclose(f_input);
     fclose(f_enc);
-    
+   
     /*DECRYPTION
     ****zero means we want to decrypt*********/
     params->encrypt = 0;
@@ -102,7 +113,50 @@ int main (int argc, char *argv[])
         fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
         return errno;
     }
+    /*TODO finish doing the the byte change in the propagation file*/
+    f_enc_prop= fopen("prop_file", "wb");
+    if(!f_enc_prop) {
+       fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno)); 
+       return errno;
+    }
+    while((n = fread(copybuff, 1, BUFSIZE, f_input)) != 0) {
+        fwrite(copybuff, sizeof(unsigned char), n, f_enc_prop);
+    }
+    fclose(f_input);
+    fclose(f_enc_prop);
     
+    //reopen the f_enc_prop file in r+b mode
+    f_enc_prop = fopen("prop_file", "r+b");
+    if (!f_enc_prop) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
+    char somechar = 'e'; /*1 byte of data*/
+    /*MODIFY a byte in the f_enc_prop file*/
+    fseek(f_enc_prop, 5, SEEK_SET);
+    fwrite(&somechar, sizeof(char), 1, f_enc_prop);
+    fclose(f_enc_prop);
+    /*Open the file dec_prop that will be compared to the original text file to see the encryption propagation error.*/
+    
+    f_enc_prop = fopen("prop_file", "rb");
+    f_dec_prop = fopen("dec_prop", "wb");
+    if(! f_enc_prop || ! f_dec_prop) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
+    
+    file_encrypt_decrypt(params, f_enc_prop, f_dec_prop);
+   
+    /*TODO Close the files*/
+    fclose(f_enc_prop);
+    fclose(f_dec_prop);
+    
+    /************END of file byte modification************/
+    f_input = fopen("encrypted_file", "rb");
+    if(!f_input) {
+        fprintf(stderr, "ERROR: fopen error: %s\n", strerror(errno));
+        return errno;
+    }
     // open and truncate file to zero length or create decrypted file for for writting
     f_dec = fopen("decrypted_file", "wb");
     if (!f_dec) {
@@ -120,11 +174,11 @@ int main (int argc, char *argv[])
 }
 
 /*BEGIN file_encrypt_decrypt function*/
-void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr)
-{
+void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr) {
     int cipher_block_size = EVP_CIPHER_block_size(params->cipher_type);
     unsigned char in_buf[BUFSIZE];
     unsigned char out_buf[BUFSIZE + cipher_block_size];
+
     
     int num_bytes_read;
     int out_len;
@@ -151,7 +205,7 @@ void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr)
         cleanup(params, infptr, ofptr, ERR_EVP_CIPHER_INIT);
     }
     
-    printf("Key: %s \t IV: %s", params->key, params->iv);
+    //printf("\nKey: %s \t IV: %s\n", params->key, params->iv);
     
     while(1) {
         // read in data in blocks until EOF. Update the ciphering with each read.
@@ -178,7 +232,7 @@ void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr)
             break;
         }
     }
-        
+
         /*Now cipher the final block and write it out to file*/
         if(!EVP_CipherFinal_ex(ctx, out_buf, &out_len)){
             fprintf(stderr, "ERROR: EVP_CipherFinal_ex failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
@@ -194,3 +248,6 @@ void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr)
         EVP_CIPHER_CTX_cleanup(ctx);
 }
 
+void propagation(cipher_params_t* params, FILE* infptr, FILE* ofptr) {
+    
+}
