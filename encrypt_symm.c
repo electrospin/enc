@@ -2,12 +2,12 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
+#include <ctype.h>
 //#include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/aes.h>
-
 
 #define AES_256_KEY_SIZE 32 /*32 byte key (256 bit key)*/
 #define AES_BLOCK_SIZE  16 /*16 byte block size (128 bits)*/
@@ -25,20 +25,21 @@ typedef struct _cipher_params_t{
    const EVP_CIPHER *cipher_type;
 }cipher_params_t;
 
+typedef enum CIPHER_MODE {ECB, CBC, CFB, OFB, CTR} ciphermode_alias;
+const static struct {
+    ciphermode_alias mode;
+    char *str;
+} mapper[] = {{ECB, "ECB"}, {CBC,"CBC"}, {CFB, "CFB"}, {CTR, "CTR"}};
+
+/*Function prototypes*/
+ciphermode_alias str2enum (char *);
 void file_encrypt_decrypt(cipher_params_t *params, FILE *infptr, FILE *ofptr);
+void upstr (char *);
+void cleanup(cipher_params_t *, FILE *, FILE *, int);
 
-void cleanup(cipher_params_t *params, FILE *ifp, FILE *ofp, int rc) {
-    free(params);
-    fclose(ifp);
-    fclose(ofp);
-    exit(rc);
-}
-
-enum MODES {ECB, CBC, CTR};
-
+/*BEGIN MAIN*/
 int main (int argc, char *argv[])
 {
-    
     FILE *f_input;
     FILE *f_enc;
     FILE *f_dec;
@@ -46,17 +47,50 @@ int main (int argc, char *argv[])
     FILE *f_dec_prop;
     unsigned char  copybuff[BUFSIZE];
     size_t n;
+    int a; // for choosing cipher mode from user input at runtime
+    char *usermode;
 
-    if(argc != 2) {
+    if(argc != 3) {
       printf("Usage: %s need to pass in /path/to/file \n", argv[0]);
       return -1;
     }
-
+    
     cipher_params_t *params = (cipher_params_t *)malloc(sizeof(cipher_params_t));
     if(!params) {
        //unable to allocate memory on heap
        fprintf(stderr, "ERROR: malloc error: %s\n", strerror(errno));
        return errno;
+    }
+    
+    /*VALIDATE CIPHER MODE user input*/
+    //printf("You entered: %s as the cipher mode.\n", argv[2]);
+    usermode = argv[2];
+        
+    a = str2enum (usermode);
+    printf("You entered: %s as the cipher mode and %d as enum.\n", usermode, a);    
+    /*pass in mode as a runtime parameter and act accordingly*/
+  
+
+   switch (a) {
+        case 0:/* ECB*/
+            params->cipher_type = EVP_aes_256_ecb();
+            break;
+        case 1:/*CBC*/
+            params->cipher_type = EVP_aes_256_cbc();
+            break;
+        case 2:/*CFB*/ 
+            params->cipher_type = EVP_aes_256_cfb1();
+            break;
+        case 3:/* OFB*/
+            params->cipher_type = EVP_aes_256_ofb();
+            break;
+        case 4:/*CTR*/
+            params->cipher_type = EVP_aes_256_ctr();
+            break;
+        default:
+            printf("NO cipher mode was interpreted,defaulting to CBC\n");
+            params->cipher_type = EVP_aes_256_cbc();
+            break;
     }
     
     //key to use for encryption and decryption
@@ -68,7 +102,7 @@ int main (int argc, char *argv[])
     /*Print error if PRNG does not seed with enough randomness*/
     if(!RAND_bytes(key, sizeof(key)) || !RAND_bytes(iv, sizeof(iv))) {
         /*OpenSSL reports a failure, act accordingly*/
-        fprintf(stderr, "ERROR: RAND_bytes error: %\n", strerror(errno));
+        fprintf(stderr, "ERROR: RAND_bytes error: %s \n", strerror(errno));
         return errno;
     }
     
@@ -78,12 +112,7 @@ int main (int argc, char *argv[])
     // indicate that we want to encrypt
     params->encrypt = 1;
     // set the cipher type you want for encryption-decryption
-    
-    /*pass in mode as a runtime parameter and act accordingly
-    case(1): MODE == 0;
-    case(2): MODE == 1;*/
-
-    params->cipher_type = EVP_aes_256_cbc();
+    //params->cipher_type = EVP_aes_256_cbc();
    
     //Open the plain text file for reading in binary
     f_input = fopen(argv[1], "rb");
@@ -256,3 +285,40 @@ void file_encrypt_decrypt(cipher_params_t* params, FILE* infptr, FILE* ofptr) {
         EVP_CIPHER_CTX_cleanup(ctx);
 }
 
+<<<<<<< HEAD
+=======
+void upstr (char *s) {
+    char *p;
+    for (p = s; *p != '\0'; p++){
+        *p = (char) toupper(*p);
+    }
+}
+ciphermode_alias str2enum (char *str) {
+    
+//     char *p = str;
+//     while (*p != '\0') {
+//         *p = (char)toupper(*p);
+//          p++;
+//     }
+    upstr(str);
+    printf("TOUPPER:\t %s\n", str);
+    for (ciphermode_alias j = ECB; j <= CTR; (ciphermode_alias) (j++)) {
+        //puts(mapper[1].str);
+        if (strcmp(str, mapper[j].str) == 0){
+            printf("in for loop string to enum\n");
+            puts(str);
+           // printf("here is the mode: %s\n", mapper[j].mode);
+            return mapper[j].mode;
+        }
+       /* else 
+            printf("You entered as the mode: %s   No such CIPHER_MODE!\n",upper);*/
+    }
+}
+
+void cleanup(cipher_params_t *params, FILE *ifp, FILE *ofp, int rc) {
+    free(params);
+    fclose(ifp);
+    fclose(ofp);
+    exit(rc);
+}
+>>>>>>> working-state
